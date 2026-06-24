@@ -1,0 +1,6 @@
+streamlit
+textstat
+pdfplumber
+nltk
+pandas
+pyspellchecker

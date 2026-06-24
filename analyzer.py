@@ -1,0 +1,281 @@
+"""Compute readability metrics matching Readable.com + CBA-specific additions."""
+
+import re
+import json
+import datetime
+import os
+import textstat
+import nltk
+from nltk.sentiment import SentimentIntensityAnalyzer
+from spellchecker import SpellChecker
+
+# Ensure required NLTK data
+for resource, kind in [
+    ("averaged_perceptron_tagger_eng", "taggers"),
+    ("punkt_tab", "taggers"),
+    ("vader_lexicon", "sentiment"),
+]:
+    try:
+        nltk.data.find(f"{kind}/{resource}")
+    except LookupError:
+        nltk.download(resource, quiet=True)
+
+_spell = SpellChecker()
+_sia = SentimentIntensityAnalyzer()
+_grammar_tool = None
+
+
+def _get_grammar_tool():
+    global _grammar_tool
+    if _grammar_tool is None:
+        import language_tool_python
+        _grammar_tool = language_tool_python.LanguageTool("en-US")
+    return _grammar_tool
+
+
+# ── helpers ────────────────────────────────────────────────────────────────────
+
+def _sentences(text: str) -> list:
+    try:
+        return nltk.sent_tokenize(text)
+    except Exception:
+        return re.split(r'(?<=[.!?])\s+', text)
+
+
+def _words(text: str) -> list:
+    return re.findall(r"[A-Za-z']+", text)
+
+
+def _alpha_words(text: str) -> list:
+    return re.findall(r"[A-Za-z]+", text)
+
+
+# ── Part 1: Readable.com metrics ───────────────────────────────────────────────
+
+def _letter_grade(fk: float) -> str:
+    if fk <= 6:
+        return "A"
+    if fk <= 9:
+        return "B"
+    if fk <= 12:
+        return "C"
+    if fk <= 16:
+        return "D"
+    return "F"
+
+
+def _reach_score(flesch_ease: float) -> float:
+    """Linear interpolation: FRE 100 → 85%, FRE 0 → 0%. Capped at 85%."""
+    score = (flesch_ease / 100) * 85
+    return round(min(max(score, 0), 85), 1)
+
+
+def _sentiment_label(compound: float) -> str:
+    if compound >= 0.05:
+        return "Positive"
+    if compound <= -0.05:
+        return "Negative"
+    return "Neutral"
+
+
+def _sentiment(text: str) -> dict:
+    overall = _sia.polarity_scores(text)
+    thirds = len(text) // 3
+    parts = {
+        "beginning": text[:thirds],
+        "middle": text[thirds: 2 * thirds],
+        "end": text[2 * thirds:],
+    }
+    result = {
+        "overall_compound": round(overall["compound"], 3),
+        "overall_label": _sentiment_label(overall["compound"]),
+    }
+    for name, chunk in parts.items():
+        s = _sia.polarity_scores(chunk)
+        result[f"{name}_compound"] = round(s["compound"], 3)
+        result[f"{name}_label"] = _sentiment_label(s["compound"])
+    return result
+
+
+# ── Part 2: CBA-specific metrics ───────────────────────────────────────────────
+
+FORWARD_WORDS = re.compile(
+    r'\b(will|shall|expects?|anticipates?|is expected|are expected|projects?|forecasts?)\b',
+    re.IGNORECASE,
+)
+
+HEDGE_WORDS = re.compile(
+    r'\b(may|might|could|possibly|approximately|around|roughly|if|uncertain|unclear)\b',
+    re.IGNORECASE,
+)
+
+PASSIVE_PATTERN = re.compile(
+    r'\b(is|are|was|were|be|been|being)\s+(?:\w+\s+){0,2}\w+(?:ed|en)\b',
+    re.IGNORECASE,
+)
+
+JARGON_LIST = [
+    "basis points", "refinancing rate", "lombard repo", "nairu", "fpas",
+    "prmaps", "quantitative easing", "yield curve", "monetary transmission",
+    "output gap", "potential gdp", "nominal anchor", "repo rate",
+    "inflation expectations", "forward guidance", "neutral rate",
+    "real effective exchange rate", "balance of payments", "current account",
+]
+
+
+def _jargon_density(text: str, word_count: int) -> dict:
+    text_lower = text.lower()
+    count = sum(text_lower.count(term) for term in JARGON_LIST)
+    density = round(count / word_count * 100, 2) if word_count else 0
+    return {"jargon_count": count, "jargon_per_100_words": density}
+
+
+def _lexical_diversity(words: list) -> dict:
+    if not words:
+        return {"unique_words": 0, "ttr": 0.0, "ttr_pct": 0.0}
+    unique = len(set(w.lower() for w in words))
+    ttr = unique / len(words)
+    return {
+        "unique_words": unique,
+        "ttr": round(ttr, 4),
+        "ttr_pct": round(ttr * 100, 1),
+    }
+
+
+# ── Section-level readability ──────────────────────────────────────────────────
+
+KNOWN_SECTIONS = re.compile(
+    r'^(Executive Summary|Global Economy|Domestic Economy|Labor Market|'
+    r'Financial Markets|Monetary Policy Outlook|Inflation|Economic Activity|'
+    r'External Sector|Fiscal|Risks?|Conclusion)',
+    re.IGNORECASE,
+)
+
+
+def _detect_sections(text: str) -> list:
+    """Return list of (section_name, section_text) tuples."""
+    lines = text.splitlines()
+    sections = []
+    current_name = "Preamble"
+    current_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        is_heading = (
+            (stripped.isupper() and 3 < len(stripped) < 80)
+            or KNOWN_SECTIONS.match(stripped)
+        )
+        if is_heading and current_lines:
+            sections.append((current_name, "\n".join(current_lines)))
+            current_name = stripped.title()
+            current_lines = []
+        else:
+            current_lines.append(line)
+
+    if current_lines:
+        sections.append((current_name, "\n".join(current_lines)))
+
+    return [(n, t) for n, t in sections if len(t.split()) > 50]
+
+
+def _section_readability(text: str) -> list:
+    sections = _detect_sections(text)
+    results = []
+    for name, chunk in sections:
+        try:
+            fk = round(textstat.flesch_kincaid_grade(chunk), 1)
+            fre = round(textstat.flesch_reading_ease(chunk), 1)
+        except Exception:
+            fk, fre = None, None
+        results.append({"section": name, "fk_grade": fk, "flesch_ease": fre})
+    return results
+
+
+# ── Main entry point ───────────────────────────────────────────────────────────
+
+def analyze(text: str, check_grammar: bool = False) -> dict:
+    sents = _sentences(text)
+    words = _words(text)
+    alpha = _alpha_words(text)
+    # Readable.com counts each non-empty line as a paragraph (PDF lines are visual units)
+    paragraphs = [ln for ln in text.splitlines() if ln.strip()]
+
+    fk_grade = textstat.flesch_kincaid_grade(text)
+    fog = textstat.gunning_fog(text)
+    flesch_ease = textstat.flesch_reading_ease(text)
+
+    long_sents = []
+    for s in sents:
+        syls = sum(textstat.syllable_count(w) for w in _words(s))
+        if syls > 30:
+            long_sents.append(s)
+
+    long_words = [w for w in alpha if len(w) > 12]
+
+    tagged = nltk.pos_tag(nltk.word_tokenize(text))
+    adverbs = [w for w, tag in tagged if tag in ("RB", "RBR", "RBS")]
+
+    misspelled = _spell.unknown(alpha)
+    spelling_issues = [w for w in misspelled if len(w) >= 3]
+
+    grammar_count = 0
+    if check_grammar:
+        try:
+            tool = _get_grammar_tool()
+            grammar_count = len(tool.check(text))
+        except Exception:
+            grammar_count = -1  # signals unavailable
+
+    forward_count = len(FORWARD_WORDS.findall(text))
+    hedge_count = len(HEDGE_WORDS.findall(text))
+    fwd_hedge_ratio = round(forward_count / hedge_count, 2) if hedge_count else None
+
+    passive_sents = [s for s in sents if PASSIVE_PATTERN.search(s)]
+
+    jargon = _jargon_density(text, len(words))
+    diversity = _lexical_diversity(words)
+    sentiment = _sentiment(text)
+    sections = _section_readability(text)
+
+    return {
+        # Part 1
+        "flesch_kincaid_grade": round(fk_grade, 1),
+        "gunning_fog": round(fog, 1),
+        "flesch_reading_ease": round(flesch_ease, 1),
+        "overall_grade": _letter_grade(fk_grade),
+        "reach_pct": _reach_score(flesch_ease),
+        "word_count": len(words),
+        "sentence_count": len(sents),
+        "paragraph_count": len(paragraphs),
+        "long_sentences_count": len(long_sents),
+        "long_sentences_pct": round(len(long_sents) / len(sents) * 100, 1) if sents else 0,
+        "long_words_count": len(long_words),
+        "long_words_pct": round(len(long_words) / len(words) * 100, 1) if words else 0,
+        "adverb_count": len(adverbs),
+        "adverb_pct": round(len(adverbs) / len(words) * 100, 1) if words else 0,
+        "spelling_issues": len(spelling_issues),
+        "grammar_issues": grammar_count,
+        "sentiment": sentiment,
+        # Part 2
+        "forward_word_count": forward_count,
+        "hedge_word_count": hedge_count,
+        "forward_hedge_ratio": fwd_hedge_ratio,
+        "passive_sentence_count": len(passive_sents),
+        "passive_sentence_pct": round(len(passive_sents) / len(sents) * 100, 1) if sents else 0,
+        "jargon_count": jargon["jargon_count"],
+        "jargon_per_100_words": jargon["jargon_per_100_words"],
+        "unique_words": diversity["unique_words"],
+        "ttr": diversity["ttr"],
+        "ttr_pct": diversity["ttr_pct"],
+        "section_readability": sections,
+    }
+
+
+def save_json(metrics: dict, doc_name: str, output_dir: str = "04_analysis/readability") -> str:
+    os.makedirs(output_dir, exist_ok=True)
+    date_str = datetime.date.today().isoformat()
+    safe_name = re.sub(r'[^A-Za-z0-9_\-]', '_', os.path.splitext(doc_name)[0])
+    path = os.path.join(output_dir, f"{safe_name}_{date_str}.json")
+    with open(path, "w") as f:
+        json.dump({"document": doc_name, "date": date_str, "metrics": metrics}, f, indent=2)
+    return path
