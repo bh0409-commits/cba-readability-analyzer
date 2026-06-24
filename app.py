@@ -69,7 +69,7 @@ if uploaded:
         metrics = analyze(text, check_grammar=check_grammar)
 
     # Save JSON
-    json_path = save_json(metrics, uploaded.name, output_dir="/Users/bentonhellwig/cba_app/results")
+    json_path = save_json(metrics, uploaded.name, output_dir="/tmp/cba_results")
     st.success(f"Analysis complete! Results saved to `{json_path}`")
 
     # ── Part 1: Readable.com Metrics ────────────────────────────────────────────
