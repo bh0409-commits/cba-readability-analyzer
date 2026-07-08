@@ -52,16 +52,51 @@ def _alpha_words(text: str) -> list:
 
 # ── Part 1: Readable.com metrics ───────────────────────────────────────────────
 
-def _letter_grade(fk: float) -> str:
-    if fk <= 6:
+def _letter_grade(grade: float) -> str:
+    """Standard grade-level → letter grade used for FK and all new indices."""
+    if grade <= 6:
         return "A"
-    if fk <= 9:
+    if grade <= 9:
         return "B"
-    if fk <= 12:
+    if grade <= 12:
         return "C"
-    if fk <= 16:
+    if grade <= 16:
         return "D"
     return "F"
+
+
+# ── Additional readability indices ─────────────────────────────────────────────
+
+def _smog_score(text: str, sents: list, words: list) -> float:
+    """SMOG: 1.0430 × √(polysyllables × 30/sentences) + 3.1291"""
+    n_sents = len(sents)
+    if n_sents < 3:
+        return 0.0
+    polysyllables = sum(1 for w in words if textstat.syllable_count(w) >= 3)
+    return round(1.0430 * (polysyllables * (30 / n_sents)) ** 0.5 + 3.1291, 1)
+
+
+def _coleman_liau_score(text: str, words: list, sents: list) -> float:
+    """Coleman-Liau: 0.0588×L − 0.296×S − 15.8
+    L = avg chars per 100 words, S = avg sentences per 100 words"""
+    n_words = len(words)
+    n_sents = len(sents)
+    if not n_words or not n_sents:
+        return 0.0
+    chars = sum(len(w) for w in words)
+    L = (chars / n_words) * 100
+    S = (n_sents / n_words) * 100
+    return round(0.0588 * L - 0.296 * S - 15.8, 1)
+
+
+def _ari_score(text: str, words: list, sents: list) -> float:
+    """ARI: 4.71×(chars/words) + 0.5×(words/sentences) − 21.43"""
+    n_words = len(words)
+    n_sents = len(sents)
+    if not n_words or not n_sents:
+        return 0.0
+    chars = sum(len(w) for w in words)
+    return round(4.71 * (chars / n_words) + 0.5 * (n_words / n_sents) - 21.43, 1)
 
 
 def _reach_score(flesch_ease: float) -> float:
@@ -203,6 +238,9 @@ def analyze(text: str, check_grammar: bool = False) -> dict:
     fk_grade = textstat.flesch_kincaid_grade(text)
     fog = textstat.gunning_fog(text)
     flesch_ease = textstat.flesch_reading_ease(text)
+    smog = _smog_score(text, sents, words)
+    cli = _coleman_liau_score(text, words, sents)
+    ari = _ari_score(text, words, sents)
 
     long_sents = []
     for s in sents:
@@ -238,12 +276,21 @@ def analyze(text: str, check_grammar: bool = False) -> dict:
     sections = _section_readability(text)
 
     return {
-        # Part 1
+        # Part 1 — core Readable.com metrics
         "flesch_kincaid_grade": round(fk_grade, 1),
+        "flesch_kincaid_letter": _letter_grade(fk_grade),
         "gunning_fog": round(fog, 1),
+        "gunning_fog_letter": _letter_grade(fog),
         "flesch_reading_ease": round(flesch_ease, 1),
         "overall_grade": _letter_grade(fk_grade),
         "reach_pct": _reach_score(flesch_ease),
+        # Additional indices
+        "smog_grade": smog,
+        "smog_letter": _letter_grade(smog),
+        "coleman_liau_grade": cli,
+        "coleman_liau_letter": _letter_grade(cli),
+        "ari_grade": ari,
+        "ari_letter": _letter_grade(ari),
         "word_count": len(words),
         "sentence_count": len(sents),
         "paragraph_count": len(paragraphs),
@@ -271,7 +318,7 @@ def analyze(text: str, check_grammar: bool = False) -> dict:
     }
 
 
-def save_json(metrics: dict, doc_name: str, output_dir: str = "04_analysis/readability") -> str:
+def save_json(metrics: dict, doc_name: str, output_dir: str = "results") -> str:
     os.makedirs(output_dir, exist_ok=True)
     date_str = datetime.date.today().isoformat()
     safe_name = re.sub(r'[^A-Za-z0-9_\-]', '_', os.path.splitext(doc_name)[0])

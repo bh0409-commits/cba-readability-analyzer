@@ -17,11 +17,20 @@ st.markdown("Upload a PDF to score it on readability metrics matching Readable.c
 with st.expander("📖 Readability Reference Key", expanded=False):
     st.code("""READABILITY REFERENCE KEY
 ─────────────────────────────────────────────────────────────────────
-OVERALL GRADE          A (best) → F (hardest to read)
-Flesch-Kincaid Grade   ≤6 = accessible | 7–9 = standard | 10–12 = moderate | 17+ = very difficult
-Gunning Fog            <10 = accessible | 10–13 = standard | 14+ = difficult
-Flesch Reading Ease    70–100 = easy | 50–70 = standard | 30–50 = difficult | <30 = very difficult
-Reach                  80%+ = excellent | 60–80% = good | <60% = limited audience
+LETTER GRADE           A (≤6th grade) | B (7–9) | C (10–12) | D (13–16) | F (17+)
+
+CORE INDICES
+Flesch-Kincaid Grade   US school grade level of text. ≤6 = accessible | 10–12 = moderate | 17+ = very difficult
+Gunning Fog            Yrs of education needed. <10 = accessible | 10–13 = standard | 14+ = difficult
+Flesch Reading Ease    0–100 ease score (higher = easier). 70–100 = easy | 30–50 = difficult | <30 = very difficult
+Reach                  % of literate public who can read it. 80%+ = excellent | <60% = limited audience
+
+ADDITIONAL INDICES
+SMOG                   Polysyllable-based grade level. Strong predictor for health/policy docs. Grade 9–12 = standard
+Coleman-Liau           Character-based (not syllable). Grade level; less affected by syllable-counting errors
+ARI                    Character + word length grade level. Correlates well with FK; useful cross-check
+
+COMPLEXITY FLAGS
 Sentences >30 syl.     <10% = good | 10–20% = acceptable | >20% = too complex
 Adverb Rate            <5% = good | >10% = overused
 Passive Voice          <15% = good | >25% = problematic
@@ -107,6 +116,32 @@ if uploaded:
             "Adverb Count",
             f"{metrics['adverb_count']:,} ({metrics['adverb_pct']}%)",
         )
+
+    # ── Additional Readability Indices ──────────────────────────────────────────
+    st.divider()
+    st.subheader("Additional Readability Indices")
+    st.caption("Three independent formulas cross-checking FK/Fog — each uses a different text feature (polysyllables, characters, word length).")
+
+    gc = {"A": "🟢", "B": "🟡", "C": "🟠", "D": "🔴", "F": "🔴"}
+    icol1, icol2, icol3 = st.columns(3)
+
+    with icol1:
+        smog = metrics["smog_grade"]
+        sl = metrics["smog_letter"]
+        st.metric("SMOG Grade", f"{smog}  {gc.get(sl,'')} {sl}")
+        st.caption("Simple Measure of Gobbledygook — counts polysyllabic words. Reliable predictor for policy & health documents.")
+
+    with icol2:
+        cli = metrics["coleman_liau_grade"]
+        cl = metrics["coleman_liau_letter"]
+        st.metric("Coleman-Liau Index", f"{cli}  {gc.get(cl,'')} {cl}")
+        st.caption("Character-based formula — not affected by syllable-counting errors. Useful when text contains many technical terms.")
+
+    with icol3:
+        ari = metrics["ari_grade"]
+        al = metrics["ari_letter"]
+        st.metric("Automated Readability Index", f"{ari}  {gc.get(al,'')} {al}")
+        st.caption("Uses character-to-word and word-to-sentence ratios. Strong correlation with FK; good cross-check.")
 
     col4, col5 = st.columns(2)
     with col4:
