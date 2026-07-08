@@ -126,21 +126,21 @@ if uploaded:
     icol1, icol2, icol3 = st.columns(3)
 
     with icol1:
-        smog = metrics["smog_grade"]
-        sl = metrics["smog_letter"]
-        st.metric("SMOG Grade", f"{smog}  {gc.get(sl,'')} {sl}")
+        smog = metrics.get("smog_grade", "N/A")
+        sl = metrics.get("smog_letter", "")
+        st.metric("SMOG Grade", f"{smog}  {gc.get(sl,'')} {sl}".strip())
         st.caption("Simple Measure of Gobbledygook — counts polysyllabic words. Reliable predictor for policy & health documents.")
 
     with icol2:
-        cli = metrics["coleman_liau_grade"]
-        cl = metrics["coleman_liau_letter"]
-        st.metric("Coleman-Liau Index", f"{cli}  {gc.get(cl,'')} {cl}")
+        cli = metrics.get("coleman_liau_grade", "N/A")
+        cl = metrics.get("coleman_liau_letter", "")
+        st.metric("Coleman-Liau Index", f"{cli}  {gc.get(cl,'')} {cl}".strip())
         st.caption("Character-based formula — not affected by syllable-counting errors. Useful when text contains many technical terms.")
 
     with icol3:
-        ari = metrics["ari_grade"]
-        al = metrics["ari_letter"]
-        st.metric("Automated Readability Index", f"{ari}  {gc.get(al,'')} {al}")
+        ari = metrics.get("ari_grade", "N/A")
+        al = metrics.get("ari_letter", "")
+        st.metric("Automated Readability Index", f"{ari}  {gc.get(al,'')} {al}".strip())
         st.caption("Uses character-to-word and word-to-sentence ratios. Strong correlation with FK; good cross-check.")
 
     col4, col5 = st.columns(2)
