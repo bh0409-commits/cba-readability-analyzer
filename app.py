@@ -27,7 +27,7 @@ def _logo_html():
             b64 = base64.b64encode(f.read()).decode()
         return f'<img src="data:image/png;base64,{b64}" alt="Central Bank of Armenia" class="cba-logo">'
     except Exception:
-        return '<div style="font-size:11px;font-weight:700;letter-spacing:0.1em;color:var(--navy);margin-bottom:16px;">CENTRAL BANK OF ARMENIA</div>'
+        return '<div style="font-size:11px;font-weight:700;letter-spacing:0.1em;color:var(--navy);margin-top:8px;text-align:right;">CENTRAL BANK<br>OF ARMENIA</div>'
 
 LOGO_HTML = _logo_html()
 
@@ -56,7 +56,7 @@ div[data-testid="stMarkdownContainer"] { font-family: 'Inter', sans-serif; }
 .stFileUploader > div { background: var(--card) !important; border: 1px solid var(--line) !important; border-radius: 10px !important; }
 * { box-sizing: border-box; }
 body { font-family: 'Inter', sans-serif; color: var(--navy); }
-.cba-logo { height: 38px; width: auto; display: block; margin-bottom: 20px; }
+.cba-logo { height: 44px; width: auto; display: block; margin-top: 4px; flex-shrink: 0; }
 .eyebrow { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--teal); font-weight: 600; margin-bottom: 10px; }
 .app-title { font-family: 'Source Serif 4', serif; font-weight: 700; font-size: 36px; line-height: 1.1; margin: 0 0 12px; color: var(--navy); }
 .app-sub { font-size: 15px; color: var(--navy-70); max-width: 680px; line-height: 1.6; margin: 0 0 24px; }
@@ -204,9 +204,13 @@ with st.sidebar:
 
 # ── Header ───────────────────────────────────────────────────────────────────────
 st.markdown(f"""
-{LOGO_HTML}
-<div class="eyebrow">Communication Quality Diagnostics</div>
-<h1 class="app-title">CBA Readability Analyzer</h1>
+<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:4px;">
+  <div>
+    <div class="eyebrow">Communication Quality Diagnostics</div>
+    <h1 class="app-title">CBA Readability Analyzer</h1>
+  </div>
+  {LOGO_HTML}
+</div>
 <p class="app-sub">Score a document against Readable.com-equivalent metrics plus CBA-specific communication indicators. A horizontal scale runs through every scored metric — the marker shows at a glance where this document sits.</p>
 
 <details class="disc">
