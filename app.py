@@ -200,7 +200,7 @@ st.markdown(f"""
   </div>
   {LOGO_HTML}
 </div>
-<p class="app-sub">Score a document against Readable.com-equivalent metrics plus CBA-specific communication indicators. A horizontal scale runs through every scored metric — the marker shows at a glance where this document sits.</p>
+<p class="app-sub">Score a document on standard readability metrics plus CBA-specific communication indicators. A horizontal scale runs through every scored metric — the marker shows at a glance where this document sits.</p>
 
 <details class="disc">
   <summary>
@@ -278,7 +278,7 @@ st.markdown("""
 st.markdown("""
 <div class="sec-head">
   <h2>Part 1 — Document Overview</h2>
-  <span class="note">Readable.com-equivalent metrics</span>
+  <span class="note">Standard readability metrics</span>
 </div>""", unsafe_allow_html=True)
 
 st.markdown(f"""
