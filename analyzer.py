@@ -23,6 +23,7 @@ for resource, kind in [
 _spell = SpellChecker()
 _sia = SentimentIntensityAnalyzer()
 _grammar_tool = None
+_roberta_pipelines = None
 
 
 def _get_grammar_tool():
@@ -31,6 +32,26 @@ def _get_grammar_tool():
         import language_tool_python
         _grammar_tool = language_tool_python.LanguageTool("en-US")
     return _grammar_tool
+
+
+def _get_roberta_pipelines():
+    """Lazy-load the CentralBankRoBERTa agent + sentiment classifiers.
+
+    Pfeifer & Marohl (2023). Downloads model weights from HuggingFace on
+    first use (~500 MB per model)."""
+    global _roberta_pipelines
+    if _roberta_pipelines is None:
+        from transformers import pipeline
+        agent = pipeline(
+            "text-classification",
+            model="Moritz-Pfeifer/CentralBankRoBERTa-agent-classifier",
+        )
+        sentiment = pipeline(
+            "text-classification",
+            model="Moritz-Pfeifer/CentralBankRoBERTa-sentiment-classifier",
+        )
+        _roberta_pipelines = (agent, sentiment)
+    return _roberta_pipelines
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -132,6 +153,71 @@ def _sentiment(text: str) -> dict:
     return result
 
 
+ROBERTA_AGENTS = ("households", "firms", "financial_sector", "government")
+
+
+def _normalize_agent_label(label: str) -> str:
+    return label.strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def _roberta_sentiment(sents: list) -> dict:
+    """Agent-conditioned sentiment via CentralBankRoBERTa.
+
+    Each sentence is tagged with the economic agent it concerns (households,
+    firms, financial sector, government); sentences with an agent label are
+    then scored positive/negative for that agent. Binary output, no neutral."""
+    agent_clf, sent_clf = _get_roberta_pipelines()
+
+    # Very short fragments (line artifacts, headings) carry no scoreable content
+    candidates = [s for s in sents if len(_words(s)) >= 4]
+    if not candidates:
+        return {
+            "n_sentences": len(sents), "n_classified": 0, "n_other": 0,
+            "overall_pos_pct": None, "overall_neg_pct": None,
+            "by_agent": {a: {"count": 0, "pos": 0, "neg": 0,
+                             "pos_pct": None, "neg_pct": None}
+                         for a in ROBERTA_AGENTS},
+        }
+
+    # RoBERTa hard limit is 512 tokens; must be passed at call time to take effect
+    tok_kwargs = {"batch_size": 16, "truncation": True, "max_length": 512}
+    agent_preds = agent_clf(candidates, **tok_kwargs)
+
+    by_agent = {a: {"count": 0, "pos": 0, "neg": 0} for a in ROBERTA_AGENTS}
+    labeled = [
+        (s, agent)
+        for s, pred in zip(candidates, agent_preds)
+        if (agent := _normalize_agent_label(pred["label"])) in ROBERTA_AGENTS
+    ]
+
+    if labeled:
+        sent_preds = sent_clf([s for s, _ in labeled], **tok_kwargs)
+        for (s, agent), pred in zip(labeled, sent_preds):
+            bucket = by_agent[agent]
+            bucket["count"] += 1
+            if "pos" in pred["label"].lower():
+                bucket["pos"] += 1
+            else:
+                bucket["neg"] += 1
+
+    total = sum(b["count"] for b in by_agent.values())
+    total_pos = sum(b["pos"] for b in by_agent.values())
+    for b in by_agent.values():
+        b["pos_pct"] = round(b["pos"] / b["count"] * 100, 1) if b["count"] else None
+        b["neg_pct"] = round(b["neg"] / b["count"] * 100, 1) if b["count"] else None
+
+    return {
+        "n_sentences": len(sents),
+        "n_classified": total,
+        # Agent model's 5th class is "Central Bank" — sentences about the CBA
+        # itself, deliberately outside the four economic-agent buckets
+        "n_other": len(candidates) - total,
+        "overall_pos_pct": round(total_pos / total * 100, 1) if total else None,
+        "overall_neg_pct": round((total - total_pos) / total * 100, 1) if total else None,
+        "by_agent": by_agent,
+    }
+
+
 # ── Part 2: CBA-specific metrics ───────────────────────────────────────────────
 
 FORWARD_WORDS = re.compile(
@@ -228,7 +314,7 @@ def _section_readability(text: str) -> list:
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
-def analyze(text: str, check_grammar: bool = False) -> dict:
+def analyze(text: str, check_grammar: bool = False, run_roberta: bool = False) -> dict:
     sents = _sentences(text)
     words = _words(text)
     alpha = _alpha_words(text)
@@ -275,6 +361,13 @@ def analyze(text: str, check_grammar: bool = False) -> dict:
     sentiment = _sentiment(text)
     sections = _section_readability(text)
 
+    roberta = None
+    if run_roberta:
+        try:
+            roberta = _roberta_sentiment(sents)
+        except Exception as e:
+            roberta = {"error": str(e)}  # signals unavailable
+
     return {
         # Part 1 — core Readable.com metrics
         "flesch_kincaid_grade": round(fk_grade, 1),
@@ -303,6 +396,7 @@ def analyze(text: str, check_grammar: bool = False) -> dict:
         "spelling_issues": len(spelling_issues),
         "grammar_issues": grammar_count,
         "sentiment": sentiment,
+        "roberta_sentiment": roberta,
         # Part 2
         "forward_word_count": forward_count,
         "hedge_word_count": hedge_count,

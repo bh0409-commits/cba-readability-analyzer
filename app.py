@@ -189,6 +189,10 @@ with st.sidebar:
         help="Skip cover/TOC pages and strip chart artifacts (CBA Monetary Policy Reports).")
     check_grammar = st.checkbox("Check grammar (slower)", value=False,
         help="Uses LanguageTool via Java — adds ~30–60 s. Requires Java.")
+    run_roberta = st.checkbox("CentralBankRoBERTa sentiment (slower)", value=False,
+        help="Agent-conditioned sentiment (Pfeifer & Marohl 2023). Downloads ~1 GB of model weights on first run; adds several minutes on CPU.")
+    run_members = st.checkbox("Board Member Language Profile (Transparency Reports only)", value=False,
+        help="Segments Section B 'Final Vote Submissions' by member and scores each on 5 language axes (1–5, Aikman scorecard format).")
 
 
 # ── Header ───────────────────────────────────────────────────────────────────────
@@ -241,6 +245,10 @@ with st.spinner("Extracting text from PDF…"):
         tmp_path = tmp.name
     try:
         text = extract_text(tmp_path, is_mpr=is_mpr)
+        member_profile = None
+        if run_members:
+            from members import profile_report
+            member_profile = profile_report(tmp_path)
     finally:
         os.unlink(tmp_path)
 
@@ -251,8 +259,8 @@ if not text.strip():
 with st.expander("Extracted text preview (first 80 words)"):
     st.write(" ".join(text.split()[:80]) + "…")
 
-with st.spinner("Computing metrics…"):
-    m = analyze(text, check_grammar=check_grammar)
+with st.spinner("Computing metrics… (CentralBankRoBERTa adds several minutes)" if run_roberta else "Computing metrics…"):
+    m = analyze(text, check_grammar=check_grammar, run_roberta=run_roberta)
 
 json_path = save_json(m, uploaded.name)
 
@@ -385,6 +393,53 @@ st.markdown(f"""
   {h_sent("End (3rd third)", sent["end_label"], sent["end_compound"])}
 </div>""", unsafe_allow_html=True)
 
+# ── CentralBankRoBERTa sentiment (toggle-gated, mirrors grammar-check pattern) ─────
+rb = m.get("roberta_sentiment")
+if run_roberta and rb:
+    st.markdown("""
+    <div class="sec-head">
+      <h2>CentralBankRoBERTa Sentiment</h2>
+      <span class="note">Agent-conditioned, per sentence · Pfeifer &amp; Marohl (2023)</span>
+    </div>""", unsafe_allow_html=True)
+
+    if "error" in rb:
+        st.warning(f"CentralBankRoBERTa unavailable: {rb['error']}")
+    else:
+        pos, neg = rb["overall_pos_pct"], rb["overall_neg_pct"]
+        overall_label = "Net positive" if (pos or 0) >= 50 else "Net negative"
+        oc = "var(--good)" if (pos or 0) >= 50 else "var(--hard)"
+        st.markdown(f"""
+        <div class="sent-strip" style="grid-template-columns:1.2fr 1fr 1fr;">
+          <div class="sc">
+            <div class="k">Overall balance</div>
+            <div class="sent-pill"><span class="dot" style="background:{oc}"></span><span style="color:{oc}">{overall_label}</span></div>
+            <div class="cmpd">{rb["n_classified"]:,} agent-classified sentences</div>
+          </div>
+          <div class="sc"><div class="k">Positive sentences</div><div class="sent-pill"><span style="color:var(--good)">{pos}%</span></div></div>
+          <div class="sc"><div class="k">Negative sentences</div><div class="sent-pill"><span style="color:var(--hard)">{neg}%</span></div></div>
+        </div>""", unsafe_allow_html=True)
+
+        agent_names = {
+            "households": "Households", "firms": "Firms",
+            "financial_sector": "Financial sector", "government": "Government",
+        }
+        rows = "".join(
+            f'<tr><td>{agent_names[a]}</td><td>{b["count"]:,}</td>'
+            f'<td>{b["pos_pct"] if b["pos_pct"] is not None else "—"}%</td>'
+            f'<td>{b["neg_pct"] if b["neg_pct"] is not None else "—"}%</td></tr>'
+            for a, b in rb["by_agent"].items()
+        )
+        st.markdown(f"""
+        <table class="stbl" style="margin-top:16px;">
+          <thead><tr><th>Agent</th><th>Sentences</th><th>Positive</th><th>Negative</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+        <p style="font-size:12px;color:var(--navy-40);margin-top:10px;">
+          {rb["n_classified"]:,} of {rb["n_sentences"]:,} sentences classified to an economic agent
+          ({rb.get("n_other", 0):,} classified as "Central Bank" — about the CBA itself — and excluded).
+          Binary classifier — no neutral class; percentages are within each agent's sentences.
+        </p>""", unsafe_allow_html=True)
+
 # ── Part 2 ─────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="sec-head">
@@ -446,9 +501,78 @@ if sections:
       <tbody>{rows}</tbody>
     </table>""", unsafe_allow_html=True)
 
+# ── Board Member Language Profile (toggle-gated, Transparency Reports only) ────────
+AXIS_COLS = [
+    ("hawkish_dovish", "Hawkish ↔ Dovish"),
+    ("optimistic_pessimistic", "Optimistic ↔ Pessimistic"),
+    ("technical_narrative", "Technical ↔ Narrative"),
+    ("individual_collective", "Individual ↔ Collective"),
+    ("certainty_hedging", "Certainty ↔ Hedging"),
+]
+
+if run_members:
+    st.markdown("""
+    <div class="sec-head">
+      <h2>Board Member Language Profile</h2>
+      <span class="note">Section B "Final Vote Submissions" · 1–5 scale, Aikman scorecard format</span>
+    </div>""", unsafe_allow_html=True)
+
+    if not member_profile:
+        st.warning('No "Final Vote Submissions" section found — this profile only '
+                   'applies to CBA Transparency Reports.')
+    else:
+        head = "".join(f"<th>{label}</th>" for _, label in AXIS_COLS)
+        rows = ""
+        for p in member_profile:
+            s = p["scores"]
+            cells = "".join(
+                f'<td><b>{s[axis]["score"]}</b>/5<br>'
+                f'<span style="font-size:11.5px;color:var(--navy-70);">{s[axis]["rationale"]}</span></td>'
+                for axis, _ in AXIS_COLS
+            )
+            rows += (f'<tr><td><b>{p["name"]}</b><br>'
+                     f'<span style="font-size:11.5px;color:var(--navy-40);">{p["title"]} · '
+                     f'{s["word_count"]} words</span></td>{cells}</tr>')
+        st.markdown(f"""
+        <table class="stbl">
+          <thead><tr><th>Member</th>{head}</tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+        <p style="font-size:12px;color:var(--navy-40);margin-top:10px;">
+          Scores are anchored to metric thresholds (dictionary counts, FK grade, jargon density,
+          pronoun ratios, forward/hedge ratio) — see members.py for the bands. Axis direction:
+          1 = dovish / pessimistic / narrative / collective / hedged · 5 = hawkish / optimistic /
+          technical / individual / certain.
+        </p>""", unsafe_allow_html=True)
+
+        mrows = []
+        for p in member_profile:
+            s = p["scores"]
+            row = {"document": uploaded.name, "title": p["title"], "name": p["name"],
+                   "word_count": s["word_count"], "sentence_count": s["sentence_count"]}
+            for axis, _ in AXIS_COLS:
+                row[f"{axis}_score"] = s[axis]["score"]
+                row[f"{axis}_rationale"] = s[axis]["rationale"]
+            mrows.append(row)
+        st.download_button(
+            "⬇ Download member scores as CSV",
+            data=pd.DataFrame(mrows).to_csv(index=False),
+            file_name=f"{os.path.splitext(uploaded.name)[0]}_member_profile.csv",
+            mime="text/csv",
+        )
+
 # ── Export ─────────────────────────────────────────────────────────────────────────
-flat = {k: v for k, v in m.items() if k not in ("sentiment", "section_readability")}
+flat = {k: v for k, v in m.items() if k not in ("sentiment", "section_readability", "roberta_sentiment")}
 flat.update({f"sentiment_{k}": v for k, v in m["sentiment"].items()})
+rb_flat = m.get("roberta_sentiment")
+if rb_flat and "error" not in rb_flat:
+    flat["roberta_overall_pos_pct"] = rb_flat["overall_pos_pct"]
+    flat["roberta_overall_neg_pct"] = rb_flat["overall_neg_pct"]
+    flat["roberta_n_classified"] = rb_flat["n_classified"]
+    for agent, b in rb_flat["by_agent"].items():
+        flat[f"roberta_{agent}_count"] = b["count"]
+        flat[f"roberta_{agent}_pos_pct"] = b["pos_pct"]
+        flat[f"roberta_{agent}_neg_pct"] = b["neg_pct"]
 df_export = pd.DataFrame([flat])
 df_export.insert(0, "document", uploaded.name)
 csv = df_export.to_csv(index=False)

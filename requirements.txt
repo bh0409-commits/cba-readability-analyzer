@@ -1,6 +1,12 @@
+# CPU-only PyTorch index — the default Linux torch wheel bundles CUDA (~2 GB+)
+# and exceeds Streamlit Community Cloud limits; the +cpu wheel is ~200 MB.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 streamlit
 textstat
 pdfplumber
 nltk
 pandas
 pyspellchecker
+torch
+transformers
